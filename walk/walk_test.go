@@ -229,6 +229,50 @@ gen(
 	}
 }
 
+func TestUseGitignore(t *testing.T) {
+	dir, cleanup := testtools.CreateFiles(t, []testtools.FileSpec{
+		{
+			Path: "BUILD.bazel",
+			Content: `
+# gazelle:use_gitignore
+`,
+		},
+		{
+			Path: ".gitignore",
+			Content: `
+*.gen.go
+ignored/
+!*.keep
+`,
+		},
+		{Path: ".dot"},              // not ignored
+		{Path: "_blank"},            // not ignored
+		{Path: "a/a.go"},            // not ignored
+		{Path: "a.go"},              // not ignored
+		{Path: "ignored/a.go.keep"}, // not ignored
+
+		{Path: "a.gen.go"},     // ignored by '*.gen.go'
+		{Path: "a/a.gen.go"},   // ignored by '*.gen.go'
+		{Path: "ignored/a.go"}, // ignored by 'ignored/'
+	})
+	defer cleanup()
+
+	c, cexts := testConfig(t, dir)
+	var files []string
+	Walk(c, cexts, []string{dir}, VisitAllUpdateSubdirsMode, func(_ string, rel string, c *config.Config, _ bool, _ *rule.File, _, regularFiles, genFiles []string) {
+		for _, f := range regularFiles {
+			files = append(files, path.Join(rel, f))
+		}
+		for _, f := range genFiles {
+			files = append(files, path.Join(rel, f))
+		}
+	})
+	want := []string{"a/a.go", "ignored/a.go.keep", ".dot", ".gitignore", "BUILD.bazel", "_blank", "a.go"}
+	if diff := cmp.Diff(want, files); diff != "" {
+		t.Errorf("Walk files (-want +got):\n%s", diff)
+	}
+}
+
 func TestExcludeSelf(t *testing.T) {
 	dir, cleanup := testtools.CreateFiles(t, []testtools.FileSpec{
 		{

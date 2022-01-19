@@ -18,11 +18,15 @@ package walk
 import (
 	"flag"
 	"log"
+	"os"
 	"path"
+	"strings"
 
 	"github.com/bazelbuild/bazel-gazelle/config"
 	"github.com/bazelbuild/bazel-gazelle/rule"
 	"github.com/bmatcuk/doublestar"
+	"github.com/go-git/go-billy/v5/osfs"
+	"github.com/go-git/go-git/v5/plumbing/format/gitignore"
 
 	gzflag "github.com/bazelbuild/bazel-gazelle/flag"
 )
@@ -32,9 +36,10 @@ import (
 // declared generated files, so we can't just stat.
 
 type walkConfig struct {
-	excludes []string
-	ignore   bool
-	follow   []string
+	excludes         []string
+	ignore           bool
+	follow           []string
+	gitignoreMatcher gitignore.Matcher
 }
 
 const walkName = "_walk"
@@ -48,6 +53,13 @@ func (wc *walkConfig) isExcluded(rel, base string) bool {
 		return true
 	}
 	f := path.Join(rel, base)
+	if wc.gitignoreMatcher != nil {
+		path := strings.Split(f, string(os.PathSeparator))
+		match := wc.gitignoreMatcher.Match(path, false)
+		if match {
+			return true
+		}
+	}
 	for _, x := range wc.excludes {
 		matched, err := doublestar.Match(x, f)
 		if err != nil {
@@ -75,10 +87,10 @@ func (_ *Configurer) RegisterFlags(fs *flag.FlagSet, cmd string, c *config.Confi
 func (_ *Configurer) CheckFlags(fs *flag.FlagSet, c *config.Config) error { return nil }
 
 func (_ *Configurer) KnownDirectives() []string {
-	return []string{"exclude", "follow", "ignore"}
+	return []string{"exclude", "follow", "ignore", "use_gitignore"}
 }
 
-func (cr *Configurer) Configure(c *config.Config, rel string, f *rule.File) {
+func (_ *Configurer) Configure(c *config.Config, rel string, f *rule.File) {
 	wc := getWalkConfig(c)
 	wcCopy := &walkConfig{}
 	*wcCopy = *wc
@@ -97,6 +109,10 @@ func (cr *Configurer) Configure(c *config.Config, rel string, f *rule.File) {
 				wcCopy.follow = append(wcCopy.follow, path.Join(rel, d.Value))
 			case "ignore":
 				wcCopy.ignore = true
+			case "use_gitignore":
+				if wcCopy.gitignoreMatcher == nil {
+					wcCopy.gitignoreMatcher = createGitignoreMatcher(c.RepoRoot)
+				}
 			}
 		}
 	}
@@ -107,4 +123,14 @@ func (cr *Configurer) Configure(c *config.Config, rel string, f *rule.File) {
 func checkPathMatchPattern(pattern string) error {
 	_, err := doublestar.Match(pattern, "x")
 	return err
+}
+
+func createGitignoreMatcher(rootDir string) gitignore.Matcher {
+	fs := osfs.New(rootDir)
+	ps, err := gitignore.ReadPatterns(fs, []string{})
+	if err != nil {
+		log.Print("failed to read .gitignore")
+	}
+	matcher := gitignore.NewMatcher(ps)
+	return matcher
 }
